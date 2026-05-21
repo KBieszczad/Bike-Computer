@@ -26,8 +26,8 @@ The device combines data from a classic magnetic reed switch (for speed tracking
 ├── hardware/
 │   ├── bike_computer.kicad_sch  # KiCad Schematic file
 │   ├── bike_computer.kicad_pcb  # KiCad PCB layout file
-│   └── img/					 # Schematic and PCB layout pdf/
-├── software/					 # Firmware files (WIP)
+│   └── img/					 # Schematic and PCB layout images
+├── software/					 # Firmware files
 └── README.md
 ```
 
@@ -36,6 +36,9 @@ The device combines data from a classic magnetic reed switch (for speed tracking
 ### Schematic
 ![Schematics](hardware/img/schematic.png)
 
+### PCB
+![Front](hardware/img/pcb_F.png)
+![Back](hardware/img/pcb_B.png)
 
 ## Authors
 
