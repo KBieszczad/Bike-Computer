@@ -24,11 +24,21 @@ enum PowerMode {
   MODE_ULTRA_ECO
 };
 
+struct TripRecord {
+  float distanceKm;
+  float speedAvgKmh;
+  uint32_t durationSec;
+};
+
+#define MAX_HISTORY 5
+
 struct SystemSettings {
   uint16_t wheelCircumferenceMm;
   PowerMode powerMode;
   bool gpsEnabled;
   uint8_t padding; 
+  TripRecord history[MAX_HISTORY];
+  uint8_t historyCount;
 };
 
 extern SystemSettings settings;

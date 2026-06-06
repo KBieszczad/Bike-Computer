@@ -13,9 +13,23 @@ Screen currentScreen = SCREEN_MAIN;
 
 volatile float speedKmh = 0.0;
 volatile float distanceTripKm = 0.0;
+volatile uint32_t tripDurationSec = 0;
 float temp = 0.0, hum = 0.0, pres = 0.0;
 uint8_t batteryPercent = 100;
 bool gpsFix = false;
+
+struct GpsPoint {
+  float lat;
+  float lon;
+  float alt;
+  uint16_t year;
+  uint8_t month;
+  uint8_t day;
+  uint8_t hr;
+  uint8_t min;
+  uint8_t sec;
+};
+unsigned long lastGpsSaveTime = 0;
 
 U8G2_SSD1309_128X64_NONAME0_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 TinyGPSPlus gps;
@@ -31,14 +45,46 @@ volatile unsigned long lastReedPulseTime = 0;
 
 
 int gpsMenuCursor = 0;
+int historyCursor = 0;
 const uint16_t wheelSizes[] = {2096, 2105, 2125, 2136, 2145, 2155, 2205, 2235, 2288};
 const int NUM_WHEEL_SIZES = sizeof(wheelSizes) / sizeof(wheelSizes[0]);
 int wheelSizeCursor = 5;
+unsigned long lastSecondTick = 0;
+
+float getSpeed() {
+  noInterrupts();
+  float v = speedKmh;
+  interrupts();
+  return v;
+}
+
+float getDistance() {
+  noInterrupts();
+  float d = distanceTripKm;
+  interrupts();
+  return d;
+}
+
+uint32_t getDuration() {
+  noInterrupts();
+  uint32_t t = tripDurationSec;
+  interrupts();
+  return t;
+}
+
+void resetTrip() {
+  noInterrupts();
+  distanceTripKm = 0.0;
+  tripDurationSec = 0;
+  speedKmh = 0.0;
+  lastReedPulseTime = millis();
+  interrupts();
+}
 
 void magnetInterrupt() {
   unsigned long currentTime = millis();
   unsigned long dt = currentTime - lastReedPulseTime;
-  if (dt > 50) { 
+  if (dt > 80) { 
     float dtSec = dt / 1000.0; 
     float circM = settings.wheelCircumferenceMm / 1000.0;
     speedKmh = (circM / dtSec) * 3.6; 
@@ -51,6 +97,7 @@ void magnetInterrupt() {
 using namespace Adafruit_LittleFS_Namespace;
 
 void saveData() {
+  InternalFS.remove("/settings.dat");
   auto file = InternalFS.open("/settings.dat", FILE_O_WRITE);
   if (file) {
     file.write((uint8_t*)&settings, sizeof(SystemSettings));
@@ -64,22 +111,56 @@ void loadData() {
   if (file) {
     if (file.size() == sizeof(SystemSettings)) {
       file.read((uint8_t*)&settings, sizeof(SystemSettings));
+      file.close();
+    } else {
+      file.close();
+      InternalFS.remove("/settings.dat");
+      saveData();
     }
-    file.close();
   } else {
     saveData();
   }
+  
+  for (int i = 0; i < NUM_WHEEL_SIZES; i++) {
+    if (wheelSizes[i] == settings.wheelCircumferenceMm) {
+      wheelSizeCursor = i;
+      break;
+    }
+  }
 }
 
-// todo
 void switchPowerMode(PowerMode newMode) {
   settings.powerMode = newMode;
   if (newMode == MODE_NORMAL) {
-
+    // bme, gps wake
+    bme.setSampling(Adafruit_BME280::MODE_NORMAL, 
+                    Adafruit_BME280::SAMPLING_X16, 
+                    Adafruit_BME280::SAMPLING_X16, 
+                    Adafruit_BME280::SAMPLING_X16, 
+                    Adafruit_BME280::FILTER_OFF, 
+                    Adafruit_BME280::STANDBY_MS_0_5);
+    Serial1.print("\r\n"); 
+    settings.gpsEnabled = true;
   } else if (newMode == MODE_ECO) {
-    // gps off
+    // bme wake, gps sleep
+    bme.setSampling(Adafruit_BME280::MODE_NORMAL, 
+                    Adafruit_BME280::SAMPLING_X16, 
+                    Adafruit_BME280::SAMPLING_X16, 
+                    Adafruit_BME280::SAMPLING_X16, 
+                    Adafruit_BME280::FILTER_OFF, 
+                    Adafruit_BME280::STANDBY_MS_0_5);
+    Serial1.print("$PCAS04,2*1A\r\n");
+    settings.gpsEnabled = false;
   } else if (newMode == MODE_ULTRA_ECO) {
-    // gps off, bme off
+    // bme, gps sleep
+    bme.setSampling(Adafruit_BME280::MODE_SLEEP, 
+                    Adafruit_BME280::SAMPLING_X16, 
+                    Adafruit_BME280::SAMPLING_X16, 
+                    Adafruit_BME280::SAMPLING_X16, 
+                    Adafruit_BME280::FILTER_OFF, 
+                    Adafruit_BME280::STANDBY_MS_0_5);
+    Serial1.print("$PCAS04,2*1A\r\n");
+    settings.gpsEnabled = false;
   }
 }
 
@@ -98,11 +179,11 @@ void drawMainScreen() {
 
     u8g2.setFont(u8g2_font_profont15_tr);
     u8g2.setCursor(43, 57);
-    u8g2.print(distanceTripKm, 1); u8g2.print(" km");
+    u8g2.print(getDistance(), 1); u8g2.print(" km");
   
     u8g2.setFont(u8g2_font_profont22_tr);
     u8g2.setCursor(10, 41);
-    u8g2.print(speedKmh, 1); u8g2.print(" km/h");
+    u8g2.print(getSpeed(), 1); u8g2.print(" km/h");
     
     if (gpsFix) {
         u8g2.drawXBMP(58, 1, 14, 16, image_checked_bits);
@@ -137,9 +218,23 @@ void drawHistoryScreen() {
     u8g2.drawStr(5, 45, "AVG Speed:");
     u8g2.drawStr(5, 60, "Time:");
     
-    u8g2.setCursor(80, 29); u8g2.print(distanceTripKm, 1);
-    u8g2.setCursor(80, 45); u8g2.print(speedKmh, 1); 
-    u8g2.setCursor(60, 61); u8g2.print("00:00:00"); 
+    if (settings.historyCount > 0) {
+      TripRecord &rec = settings.history[historyCursor];
+      u8g2.setCursor(80, 29); u8g2.print(rec.distanceKm, 1);
+      u8g2.setCursor(80, 45); u8g2.print(rec.speedAvgKmh, 1); 
+      
+      uint32_t h = rec.durationSec / 3600;
+      uint8_t m = (rec.durationSec % 3600) / 60;
+      uint8_t s = rec.durationSec % 60;
+      char timeBuf[10];
+      sprintf(timeBuf, "%02lu:%02u:%02u", (unsigned long)h, m, s);
+      u8g2.setCursor(55, 60); u8g2.print(timeBuf); 
+      
+      u8g2.setCursor(105, 13);
+      u8g2.print(historyCursor + 1); u8g2.print("/"); u8g2.print(settings.historyCount);
+    } else {
+      u8g2.setCursor(80, 45); u8g2.print("---");
+    }
 }
 
 void drawGpsScreen() {
@@ -148,13 +243,19 @@ void drawGpsScreen() {
     u8g2.setFont(u8g2_font_profont15_tr);
     u8g2.drawStr(22, 13, "GPS SETTINGS");
     
-    u8g2.setCursor(7, 32);
-    if (gpsMenuCursor == 0) u8g2.print("> ");
-    u8g2.print("ON/OFF: "); u8g2.print(settings.gpsEnabled ? "ON" : "OFF");
+    const char* options[] = {"GPS: ON", "EXPORT ROUTE", "DELETE ROUTE"};
+    if (!settings.gpsEnabled) options[0] = "GPS: OFF";
     
-    u8g2.setCursor(8, 53);
-    if (gpsMenuCursor > 0) u8g2.print("> ");
-    u8g2.print(gpsMenuCursor == 2 ? "DELETE ROUTE" : "SAVE ROUTE");
+    int startIdx = gpsMenuCursor;
+    if (startIdx == 2) startIdx = 1; 
+    
+    u8g2.setCursor(7, 32);
+    if (gpsMenuCursor == startIdx) u8g2.print("> ");
+    u8g2.print(options[startIdx]);
+    
+    u8g2.setCursor(7, 53);
+    if (gpsMenuCursor == startIdx + 1) u8g2.print("> ");
+    u8g2.print(options[startIdx + 1]);
 }
 
 void drawWheelScreen() {
@@ -182,6 +283,8 @@ void drawPowerScreen() {
 
 void setup() {
   Serial.begin(115200);
+  
+  analogReadResolution(12); 
   
   u8g2.begin();
   u8g2.setBusClock(100000);
@@ -214,6 +317,34 @@ void loop() {
     while (Serial1.available() > 0) {
       gps.encode(Serial1.read());
     }
+    gpsFix = gps.location.isValid() && gps.location.age() < 2000;
+
+    if (gpsFix && gps.date.isValid() && gps.time.isValid()) {
+      if (millis() - lastGpsSaveTime > 5000) {
+        if (getSpeed() > 2.0) {
+          GpsPoint pt;
+          pt.lat = gps.location.lat();
+          pt.lon = gps.location.lng();
+          pt.alt = gps.altitude.meters();
+          pt.year = gps.date.year();
+          pt.month = gps.date.month();
+          pt.day = gps.date.day();
+          pt.hr = gps.time.hour();
+          pt.min = gps.time.minute();
+          pt.sec = gps.time.second();
+          
+          auto file = InternalFS.open("/trace.dat", FILE_O_WRITE);
+          if (file) {
+            file.seek(file.size());
+            file.write((uint8_t*)&pt, sizeof(GpsPoint));
+            file.close();
+          }
+        }
+        lastGpsSaveTime = millis();
+      }
+    }
+  } else {
+    gpsFix = false;
   }
 
   if (btn1.pressed()) {
@@ -230,14 +361,29 @@ void loop() {
 
   if (currentScreen == SCREEN_MAIN) {
     if (btn2.isPressed() && btn2.currentDuration() > 2000 && !btn2LongPressHandled) {
-      // todo: save trip 
-      distanceTripKm = 0.0;
+      float dist = getDistance();
+      uint32_t dur = getDuration();
+      
+      if (dist > 0.1) { 
+        for (int i = MAX_HISTORY - 1; i > 0; i--) {
+          settings.history[i] = settings.history[i-1];
+        }
+        settings.history[0].distanceKm = dist;
+        settings.history[0].durationSec = dur;
+        settings.history[0].speedAvgKmh = (dur > 0) ? (dist / (dur / 3600.0)) : 0;
+        if (settings.historyCount < MAX_HISTORY) settings.historyCount++;
+        saveData();
+      }
+      InternalFS.remove("/trace.dat"); 
+      resetTrip();
       btn2LongPressHandled = true; 
     }
   } 
   else if (currentScreen == SCREEN_HISTORY) {
     if (btn2.pressed()) {
-      // todo: scroll history
+      if (settings.historyCount > 0) {
+        historyCursor = (historyCursor + 1) % settings.historyCount;
+      }
     }
   }
   else if (currentScreen == SCREEN_GPS) {
@@ -249,9 +395,31 @@ void loop() {
         settings.gpsEnabled = !settings.gpsEnabled;
         saveData();
       } else if (gpsMenuCursor == 1) {
-        // save to nvs
+        // export route to serial
+        auto file = InternalFS.open("/trace.dat", FILE_O_READ);
+        if (file) {
+          Serial.println("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+          Serial.println("<gpx version=\"1.1\" creator=\"BikeComputer\">");
+          Serial.println("  <trk><name>Bike Route</name><trkseg>");
+          GpsPoint pt;
+          while (file.read((uint8_t*)&pt, sizeof(GpsPoint)) == sizeof(GpsPoint)) {
+            Serial.print("    <trkpt lat=\""); Serial.print(pt.lat, 6);
+            Serial.print("\" lon=\""); Serial.print(pt.lon, 6); Serial.println("\">");
+            Serial.print("      <ele>"); Serial.print(pt.alt, 1); Serial.println("</ele>");
+            char timeBuf[50];
+            sprintf(timeBuf, "      <time>%04d-%02d-%02dT%02d:%02d:%02dZ</time>", 
+                    pt.year, pt.month, pt.day, pt.hr, pt.min, pt.sec);
+            Serial.println(timeBuf);
+            Serial.println("    </trkpt>");
+          }
+          Serial.println("  </trkseg></trk>");
+          Serial.println("</gpx>");
+          file.close();
+        } else {
+          Serial.println("No trace saved in memory.");
+        }
       } else if (gpsMenuCursor == 2) {
-        // delete trace
+        InternalFS.remove("/trace.dat");
       }
       btn2LongPressHandled = true;
     }
@@ -272,6 +440,15 @@ void loop() {
   if (millis() - lastReedPulseTime > 3000) {
     speedKmh = 0.0;
   }
+  
+  if (millis() - lastSecondTick > 1000) {
+    if (getSpeed() > 1.0) { 
+      noInterrupts();
+      tripDurationSec++;
+      interrupts();
+    }
+    lastSecondTick = millis();
+  }
   if (millis() - lastWeatherUpdate > 2000 && settings.powerMode != MODE_ULTRA_ECO) {
     temp = bme.readTemperature();
     hum = bme.readHumidity();
@@ -282,7 +459,8 @@ void loop() {
 #else
     int vbat_raw = analogRead(A6); 
 #endif
-    int pct = map(vbat_raw, 500, 600, 0, 100);
+    // todo: calibrate battery voltages
+    int pct = map(vbat_raw, 1876, 2388, 0, 100);
     batteryPercent = constrain(pct, 0, 100);
 
     lastWeatherUpdate = millis();
