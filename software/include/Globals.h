@@ -3,8 +3,8 @@
 #include <Arduino.h>
 
 #define PIN_REED D1   
-#define PIN_BTN1 D9   
-#define PIN_BTN2 D8  
+#define PIN_BTN1 D10   
+#define PIN_BTN2 D9  
 
 #define GPS_BAUD 9600
 

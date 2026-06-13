@@ -42,6 +42,8 @@ Bounce2::Button btn2 = Bounce2::Button();
 unsigned long lastDisplayUpdate = 0;
 unsigned long lastWeatherUpdate = 0;
 volatile unsigned long lastReedPulseTime = 0;
+volatile uint8_t pulseAccumulator = 0;
+volatile unsigned long isrDt = 0;
 
 
 int gpsMenuCursor = 0;
@@ -78,6 +80,7 @@ void resetTrip() {
   tripDurationSec = 0;
   speedKmh = 0.0;
   lastReedPulseTime = millis();
+  pulseAccumulator = 0;
   interrupts();
 }
 
@@ -85,10 +88,8 @@ void magnetInterrupt() {
   unsigned long currentTime = millis();
   unsigned long dt = currentTime - lastReedPulseTime;
   if (dt > 80) { 
-    float dtSec = dt / 1000.0; 
-    float circM = settings.wheelCircumferenceMm / 1000.0;
-    speedKmh = (circM / dtSec) * 3.6; 
-    distanceTripKm += (circM / 1000.0);
+    isrDt = dt;
+    pulseAccumulator++;
     lastReedPulseTime = currentTime;
   }
 }
@@ -287,7 +288,7 @@ void setup() {
   analogReadResolution(12); 
   
   u8g2.begin();
-  u8g2.setBusClock(100000);
+  u8g2.setBusClock(400000);
   u8g2.setContrast(100);
   
   I2C_BME.begin();
@@ -312,6 +313,22 @@ void setup() {
 void loop() {
   btn1.update();
   btn2.update();
+
+  noInterrupts();
+  uint8_t pulses = pulseAccumulator;
+  unsigned long dt = isrDt;
+  pulseAccumulator = 0;
+  interrupts();
+  
+  if (pulses > 0) {
+    float circM = settings.wheelCircumferenceMm / 1000.0;
+    float dtSec = dt / 1000.0; 
+    
+    noInterrupts();
+    speedKmh = (circM / dtSec) * 3.6; 
+    distanceTripKm += pulses * (circM / 1000.0); 
+    interrupts();
+  }
 
   if (settings.gpsEnabled) {
     while (Serial1.available() > 0) {
@@ -459,7 +476,6 @@ void loop() {
 #else
     int vbat_raw = analogRead(A6); 
 #endif
-    // todo: calibrate battery voltages
     int pct = map(vbat_raw, 1876, 2388, 0, 100);
     batteryPercent = constrain(pct, 0, 100);
 
