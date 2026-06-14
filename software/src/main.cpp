@@ -391,7 +391,6 @@ void loop() {
         if (settings.historyCount < MAX_HISTORY) settings.historyCount++;
         saveData();
       }
-      InternalFS.remove("/trace.dat"); 
       resetTrip();
       btn2LongPressHandled = true; 
     }
