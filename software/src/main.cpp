@@ -48,7 +48,7 @@ volatile unsigned long isrDt = 0;
 
 int gpsMenuCursor = 0;
 int historyCursor = 0;
-const uint16_t wheelSizes[] = {2096, 2105, 2125, 2136, 2145, 2155, 2205, 2235, 2288};
+const uint16_t wheelSizes[] = {2096, 2105, 2136, 2155, 2168, 2180, 2200, 2205, 2235, 2268};
 const int NUM_WHEEL_SIZES = sizeof(wheelSizes) / sizeof(wheelSizes[0]);
 int wheelSizeCursor = 5;
 unsigned long lastSecondTick = 0;
@@ -273,7 +273,7 @@ void drawWheelScreen() {
 void drawPowerScreen() {
     u8g2.setFontMode(1);
     u8g2.setBitmapMode(1);
-    u8g2.setFont(u8g2_font_profont17_tr);
+    u8g2.setFont(u8g2_font_profont15_tr);
     u8g2.drawStr(20, 14, "Power mode");
     
     u8g2.setCursor(24, 42);
